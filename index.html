@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>SMS開立事項查詢系統</title>
+    <title>SMS開立事項查詢及AI審查系統</title>
     <style>
         /* Reset / 基本 */
         *, *::before, *::after { box-sizing: border-box; }
@@ -35,6 +35,7 @@
         .btn-search { background:#52a3cc; color:white; }
         .btn-reset { background:#6c757d; color:white; }
         .btn-export { background:#f0ad4e; color:white; }
+        .btn-ai-all { background:#6f42c1; color:white; }
 
         .stats-section { display:none; margin:0; flex: 0 0 auto; }
         .stats-grid { display:flex; gap:10px; }
@@ -49,7 +50,7 @@
         .results-title { font-weight:800; font-size:15px; }
         .table-container { border:1px solid #ddd; border-radius:6px; overflow: visible; }
         .table-wrapper { overflow-x: auto; }
-        table { width:100%; border-collapse: collapse; min-width:1000px; font-size:13px; }
+        table { width:100%; border-collapse: collapse; min-width:1100px; font-size:13px; }
         th { position: sticky; top:0; z-index:5; background:#4a5568; color:white; padding:10px; text-align:left; font-weight:700; white-space:nowrap; }
         td { padding:10px; border-bottom:1px solid #f2f2f2; vertical-align:top; }
 
@@ -67,6 +68,16 @@
         .status-active { background:#d9534f; }
         .status-resolved { background:#5cb85c; }
         .status-self { background:#f0ad4e; color:#fff; }
+
+        .ai-badge { padding:4px 8px; border-radius:12px; font-size:12px; font-weight:700; color:white; display:inline-block; }
+        .ai-yes { background:#28a745; }
+        .ai-no  { background:#dc3545; }
+        .ai-done { background:#2e8b57; }
+        .ai-pending { background:#ffc107; color:#333; }
+        .ai-fail { background:#6c2630; }
+
+        .btn-sm { padding:6px 10px; border-radius:6px; cursor:pointer; border:none; font-weight:700; }
+        .btn-ai { background:#6f42c1; color:white; }
 
         .empty-message { text-align:center; padding:26px; color:#666; }
 
@@ -87,7 +98,14 @@
         .round-header { padding:8px 10px; background:linear-gradient(90deg,#f0fbf6,#eef8f2); font-weight:700; color:#175a2f; border-bottom:1px solid #f5f5f5; }
         .round-body { padding:10px; color:#333; font-size:13px; }
 
+        .ai-analysis-section { margin-top:12px; background:#f0f8ff; border-radius:6px; padding:10px; }
+        .ai-analysis-section h4 { margin:0 0 8px 0; color:#0b5fa5; }
+        .ai-note { font-size:13px; color:#333; }
+
         .modal-footer { padding:10px 16px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:8px; background:#fafafa; flex: 0 0 auto; }
+
+        .spinner { display:inline-block; width:14px; height:14px; border:2px solid #fff; border-radius:50%; border-top-color: rgba(0,0,0,0.2); animation:spin 0.8s linear infinite; vertical-align:middle; margin-right:6px; }
+        @keyframes spin { to { transform:rotate(360deg); } }
 
         /* 長文字欄位的顯示樣式（摘要 + 更多按鈕） */
         .cell-wrapper { position: relative; max-width:420px; }
@@ -143,7 +161,7 @@
         @media (max-width: 680px) {
             .header h1 { font-size:18px; gap:8px; }
             .data-updated { font-size:12px; }
-            table { min-width: 900px; font-size:12px; }
+            table { min-width: 1000px; font-size:12px; }
             .modal-panel { width:100%; height:100%; max-width:100%; max-height:100%; border-radius:0; }
             .modal-body { padding:12px; }
             .cell-wrapper { max-width:180px; }
@@ -153,7 +171,7 @@
 <body>
     <div class="app" id="appRoot">
         <div class="header">
-            <h1><span class="icon">🚄</span>SMS開立事項查詢系統</h1>
+            <h1><span class="icon">🚄</span>SMS開立事項查詢及AI審查系統</h1>
             <span id="dataUpdated" class="data-updated">資料庫更新：-</span>
         </div>
 
@@ -173,6 +191,7 @@
                     <button class="btn btn-search" onclick="window.searchData()">🔍 開始搜尋</button>
                     <button class="btn btn-reset" onclick="window.resetQueryFilters()">🔄 重設</button>
                     <button class="btn btn-export" onclick="window.exportQueryCSV()">📊 匯出CSV</button>
+                    <button class="btn btn-ai-all" onclick="window.analyzeAllDisplayed()">🖥️ 一鍵AI分析（目前結果）</button>
                 </div>
             </div>
 
@@ -187,7 +206,7 @@
             <div id="resultsSection" class="results-section" role="region" aria-label="查詢結果">
                 <div class="results-header">
                     <div class="results-title">📋 查詢結果 <span id="resultCount">(0 筆資料)</span></div>
-                    <div class="muted">點選列打開詳細視窗</div>
+                    <div class="muted">點選列或按「AI分析」打開詳細視窗</div>
                 </div>
 
                 <div class="table-container" aria-live="polite">
@@ -205,6 +224,7 @@
                                     <th>內容</th>
                                     <th>辦理情形</th>
                                     <th>最新審查意見</th>
+                                    <th>AI分析摘要</th>
                                 </tr>
                             </thead>
                             <tbody id="queryTableBody"></tbody>
@@ -237,15 +257,22 @@
                 </div>
 
                 <div id="modalRounds"></div>
+
+                <div class="ai-analysis-section" id="modalAISection">
+                    <h4>🔮 AI協助判斷（參考用）</h4>
+                    <div class="ai-note"><strong>是否符合改善方向：</strong><span id="aiFulfill">尚未分析</span></div>
+                    <div class="ai-note" style="margin-top:8px;"><strong>分析說明：</strong><div id="aiReason" style="margin-top:6px;color:#222;"></div></div>
+                </div>
             </div>
             <div class="modal-footer">
+                <button class="btn btn-sm" id="reAnalyzeBtn" style="background:#17a2b8;color:white;">🔁 重新分析</button>
                 <button class="btn btn-sm" id="modalCloseBtn2" style="background:#6c757d;color:white;">關閉</button>
             </div>
         </div>
     </div>
 
     <!-- 保持原始資料來源的 script -->
-    <script src="https://rbgov.sharepoint.com/sites/inspect_demo/_layouts/15/download.aspx?UniqueId=5e22f44f-eaa9-4d1b-a0ae-c050fceda031"></script>
+    <script src="https://rbgov-my.sharepoint.com/personal/hckuo_rb_gov_tw/_layouts/15/download.aspx?UniqueId=e2684913-5be9-4093-b270-1da5f074848d"></script>
 
     <script>
         // 全域變數
@@ -276,12 +303,13 @@
             document.getElementById('detailModalBackdrop').addEventListener('click', function(e){
                 if (e.target === this) closeModal();
             });
+            document.getElementById('reAnalyzeBtn').addEventListener('click', function(){ if (currentDetailId) analyzeItem(currentDetailId); });
         }
 
         function loadQueryData() {
             try {
                 if (typeof window.railwayData !== 'undefined' && Array.isArray(window.railwayData.data)) {
-                    queryDatabase = window.railwayData.data.map(function(item, index){ return { ...item, id: item.id || (index+1) }; });
+                    queryDatabase = window.railwayData.data.map(function(item, index){ return { ...item, id: item.id || (index+1), aiResult: item.aiResult || null }; });
                     initializeQueryFilters();
                 } else {
                     showMessage('找不到 Railway_data.js 或檔案格式不符', 'error');
@@ -325,7 +353,7 @@
 
         function displayInitialQueryData() {
             if (queryDatabase.length === 0) {
-                document.getElementById('queryTableBody').innerHTML = `<tr><td colspan="10" class="empty-message">資料庫無資料</td></tr>`;
+                document.getElementById('queryTableBody').innerHTML = `<tr><td colspan="11" class="empty-message">資料庫無資料</td></tr>`;
                 return;
             }
             filteredData = [...queryDatabase];
@@ -364,7 +392,7 @@
             return doc.body.textContent || "";
         }
 
-        // 切換展開/收合（僅保留更多按鈕）
+        // 切換展開/收合（只保留更多按鈕，移除複製）
         function toggleContent(id, field) {
             const shortEl = document.getElementById(`${field}-short-${id}`);
             const fullEl = document.getElementById(`${field}-full-${id}`);
@@ -388,7 +416,7 @@
             const tbody = document.getElementById('queryTableBody');
             document.getElementById('resultCount').textContent = `(${data.length} 筆資料)`;
             if (data.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="10" class="empty-message">查無符合條件的資料</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="11" class="empty-message">查無符合條件的資料</td></tr>`;
                 return;
             }
 
@@ -414,6 +442,25 @@
                 const handlingHtml = createPreviewHtml(getLatestHandling(item), 'handling', MAX_CHARS.handling);
                 const reviewHtml = createPreviewHtml(getLatestReview(item), 'review', MAX_CHARS.review);
 
+                let aiCell = `<div class="muted">尚未分析</div>`;
+                if (item.aiResult) {
+                    if (item.aiResult.status === 'analyzing') {
+                        aiCell = `<div><span class="ai-badge ai-pending"><span class="spinner"></span>分析中</span></div>`;
+                    } else if (item.aiResult.status === 'done') {
+                        const fulfill = (item.aiResult.fulfill || '').toString().trim();
+                        const snippet = (item.aiResult.reason || '').toString();
+                        if (fulfill === '是' || fulfill === 'Yes' || fulfill === 'Y') {
+                            aiCell = `<div><span class="ai-badge ai-yes">是</span></div><div style="margin-top:6px;color:#444;max-width:260px;font-size:13px;">${snippet.length>80? escapeHtml(snippet.substring(0,80)) + '...' : escapeHtml(snippet)}</div>`;
+                        } else if (fulfill === '否' || fulfill === 'No' || fulfill === 'N') {
+                            aiCell = `<div><span class="ai-badge ai-no">否</span></div><div style="margin-top:6px;color:#444;max-width:260px;font-size:13px;">${snippet.length>80? escapeHtml(snippet.substring(0,80)) + '...' : escapeHtml(snippet)}</div>`;
+                        } else {
+                            aiCell = `<div><span class="ai-badge ai-done">${escapeHtml(fulfill || '已分析')}</span></div><div style="margin-top:6px;color:#444;max-width:260px;font-size:13px;">${snippet.length>80? escapeHtml(snippet.substring(0,80)) + '...' : escapeHtml(snippet)}</div>`;
+                        }
+                    } else if (item.aiResult.status === 'error') {
+                        aiCell = `<div><span class="ai-badge ai-fail">分析失敗</span></div><div style="color:#c00;font-size:12px;margin-top:6px;">${escapeHtml(item.aiResult.error||'')}</div>`;
+                    }
+                }
+
                 return `<tr class="clickable-row" data-id="${item.id}" tabindex="0" onclick="openModal('${item.id}')">
                     <td class="preview-cell">${escapeHtml(item.year||'')}</td>
                     <td class="preview-cell">${escapeHtml(item.unit||'')}</td>
@@ -425,6 +472,12 @@
                     <td class="content-preview">${contentHtml}</td>
                     <td class="content-preview">${handlingHtml}</td>
                     <td class="content-preview">${reviewHtml}</td>
+                    <td onclick="event.stopPropagation();" style="min-width:240px;">
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <button class="btn-sm btn-ai" onclick="event.stopPropagation(); analyzeItem('${item.id}')">🖥️ AI分析</button>
+                            <div style="flex:1;">${aiCell}</div>
+                        </div>
+                    </td>
                 </tr>`;
             }).join('');
         }
@@ -442,6 +495,30 @@
             document.getElementById('viewStatus').textContent = item.status || '-';
             document.getElementById('viewContent').innerHTML = item.content || '尚無內容';
             analyzeAndDisplayRounds(item, document.getElementById('modalRounds'));
+
+            const fulfilEl = document.getElementById('aiFulfill');
+            const reasonEl = document.getElementById('aiReason');
+            if (item.aiResult && item.aiResult.status === 'done') {
+                const fulfill = (item.aiResult.fulfill || '').toString().trim();
+                const reason = item.aiResult.reason || '';
+                if (fulfill === '是' || fulfill === 'Yes' || fulfill === 'Y') {
+                    fulfilEl.innerHTML = `<span class="ai-badge ai-yes">是</span>`;
+                } else if (fulfill === '否' || fulfill === 'No' || fulfill === 'N') {
+                    fulfilEl.innerHTML = `<span class="ai-badge ai-no">否</span>`;
+                } else {
+                    fulfilEl.innerHTML = `<span class="ai-badge ai-done">${fulfill ? fulfill : '已分析'}</span>`;
+                }
+                reasonEl.textContent = reason;
+            } else if (item.aiResult && item.aiResult.status === 'analyzing') {
+                fulfilEl.textContent = '分析中...';
+                reasonEl.textContent = '分析中...';
+            } else if (item.aiResult && item.aiResult.status === 'error') {
+                fulfilEl.innerHTML = `<span class="ai-badge ai-fail">分析失敗</span>`;
+                reasonEl.textContent = item.aiResult.error || '';
+            } else {
+                fulfilEl.textContent = '尚未分析';
+                reasonEl.textContent = '尚未分析';
+            }
 
             const backdrop = document.getElementById('detailModalBackdrop');
             backdrop.classList.add('open');
@@ -557,9 +634,124 @@
             setTimeout(function(){ el.style.display = 'none'; }, 4200);
         }
 
+        // 分析單筆（改進：更友善地處理非 JSON 回應並記錄內容以便 Debug）
+        async function analyzeItem(id) {
+            const item = queryDatabase.find(r => String(r.id) === String(id));
+            if (!item) return;
+            if (item.aiResult && item.aiResult.status === 'analyzing') return;
+            item.aiResult = { status: 'analyzing' };
+            displayQueryResults(sortQueryResults(filteredData));
+            if (currentDetailId && String(currentDetailId) === String(id)) {
+                document.getElementById('aiFulfill').textContent = '分析中...';
+                document.getElementById('aiReason').textContent = '分析中...';
+            }
+            try {
+                const content = item.content || '';
+                const rounds = collectAllRounds(item);
+
+                // 如果你的後端部署在不同的 origin，請把下面路徑改為完整 URL，例如 "https://api.example.com/api/gemini"
+                const res = await fetch('/api/gemini', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ content, rounds })
+                });
+
+                const contentType = res.headers.get('content-type') || '';
+                const rawText = await res.text(); // 先取文字，避免直接解析失敗造成 Uncaught
+                if (!res.ok) {
+                    // 若後端回傳非 2xx，嘗試解析錯誤資訊
+                    let parsedError = rawText;
+                    try {
+                        if (contentType.includes('application/json')) {
+                            parsedError = JSON.parse(rawText);
+                        }
+                    } catch (e) {
+                        // leave parsedError as rawText
+                    }
+                    item.aiResult = { status: 'error', error: `Server ${res.status}: ${typeof parsedError === 'string' ? parsedError : JSON.stringify(parsedError)}` };
+                    console.error('AI API non-ok response:', res.status, rawText);
+                } else {
+                    // 回傳為 2xx：但可能是 HTML（content-type 含 text/html）或 JSON
+                    if (contentType.includes('application/json')) {
+                        let result;
+                        try {
+                            result = JSON.parse(rawText);
+                        } catch (e) {
+                            item.aiResult = { status: 'error', error: '解析 JSON 失敗' };
+                            console.error('JSON parse error:', e, rawText);
+                        }
+                        if (result) {
+                            if (result.error) {
+                                item.aiResult = { status: 'error', error: result.error };
+                            } else {
+                                item.aiResult = { status: 'done', fulfill: result.fulfill || '', reason: result.reason || '' };
+                            }
+                        }
+                    } else {
+                        // 非 JSON 回應（例如 HTML）——記錄並回報到 UI
+                        item.aiResult = { status: 'error', error: `非 JSON 回應（Content-Type: ${contentType}）。伺服器回應片段: ${rawText.substring(0,500)}` };
+                        console.error('Non-JSON response from /api/gemini:', res.status, contentType, rawText);
+                    }
+                }
+            } catch (e) {
+                item.aiResult = { status: 'error', error: e.message };
+                console.error('analyzeItem error:', e);
+            }
+            displayQueryResults(sortQueryResults(filteredData));
+            if (currentDetailId && String(currentDetailId) === String(id)) {
+                const ai = item.aiResult;
+                const fulfilEl = document.getElementById('aiFulfill');
+                const reasonEl = document.getElementById('aiReason');
+                if (ai.status === 'done') {
+                    const fulfill = (ai.fulfill || '').toString().trim();
+                    if (fulfill === '是' || fulfill === 'Yes' || fulfill === 'Y') {
+                        fulfilEl.innerHTML = `<span class="ai-badge ai-yes">是</span>`;
+                    } else if (fulfill === '否' || fulfill === 'No' || fulfill === 'N') {
+                        fulfilEl.innerHTML = `<span class="ai-badge ai-no">否</span>`;
+                    } else {
+                        fulfilEl.innerHTML = `<span class="ai-badge ai-done">${fulfill ? fulfill : '已分析'}</span>`;
+                    }
+                    reasonEl.textContent = ai.reason || '';
+                } else if (ai.status === 'error') {
+                    fulfilEl.innerHTML = `<span class="ai-badge ai-fail">分析失敗</span>`;
+                    reasonEl.textContent = ai.error || '';
+                }
+            }
+            return item.aiResult;
+        }
+
+        async function analyzeAllDisplayed() {
+            const list = filteredData.length > 0 ? filteredData : queryDatabase;
+            if (!list || list.length === 0) { showMessage('目前無資料可分析', 'error'); return; }
+            showMessage('開始依序分析每筆（可能較久），請稍候...', 'success');
+            for (let i=0;i<list.length;i++) {
+                const item = list[i];
+                if (item.aiResult && item.aiResult.status === 'done') continue;
+                await analyzeItem(item.id);
+                await new Promise(r => setTimeout(r, 220));
+            }
+            showMessage('一鍵分析完成（已更新表格中的 AI 結果）', 'success');
+        }
+
+        function runAIAnalysis() {
+            if (!currentDetailId) { document.getElementById('aiReason').textContent = '請先選擇要分析的項目'; return; }
+            analyzeItem(currentDetailId);
+        }
+
         function escapeHtml(str) {
             if (!str && str !== 0) return '';
             return String(str).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]); });
+        }
+
+        // collect rounds (unchanged)
+        function collectAllRounds(item) {
+            const rounds = [];
+            for (let i=1;i<=20;i++) {
+                const handlingKey = i===1 ? 'handling' : `handling${i}`;
+                const reviewKey = i===1 ? 'review' : `review${i}`;
+                if (item[handlingKey] || item[reviewKey]) rounds.push({ handling: item[handlingKey]||'', review: item[reviewKey]||'' });
+            }
+            return rounds;
         }
     </script>
 </body>
