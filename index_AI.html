@@ -634,7 +634,7 @@
             setTimeout(function(){ el.style.display = 'none'; }, 4200);
         }
 
-        // 分析單筆（與原邏輯相同）
+        // 分析單筆（改進：更友善地處理非 JSON 回應並記錄內容以便 Debug）
         async function analyzeItem(id) {
             const item = queryDatabase.find(r => String(r.id) === String(id));
             if (!item) return;
@@ -648,19 +648,54 @@
             try {
                 const content = item.content || '';
                 const rounds = collectAllRounds(item);
+
+                // 如果你的後端部署在不同的 origin，請把下面路徑改為完整 URL，例如 "https://api.example.com/api/gemini"
                 const res = await fetch('/api/gemini', {
                     method: 'POST',
                     headers: {'Content-Type':'application/json'},
                     body: JSON.stringify({ content, rounds })
                 });
-                const result = await res.json();
-                if (result.error) {
-                    item.aiResult = { status: 'error', error: result.error || '未知錯誤' };
+
+                const contentType = res.headers.get('content-type') || '';
+                const rawText = await res.text(); // 先取文字，避免直接解析失敗造成 Uncaught
+                if (!res.ok) {
+                    // 若後端回傳非 2xx，嘗試解析錯誤資訊
+                    let parsedError = rawText;
+                    try {
+                        if (contentType.includes('application/json')) {
+                            parsedError = JSON.parse(rawText);
+                        }
+                    } catch (e) {
+                        // leave parsedError as rawText
+                    }
+                    item.aiResult = { status: 'error', error: `Server ${res.status}: ${typeof parsedError === 'string' ? parsedError : JSON.stringify(parsedError)}` };
+                    console.error('AI API non-ok response:', res.status, rawText);
                 } else {
-                    item.aiResult = { status: 'done', fulfill: result.fulfill || '', reason: result.reason || '' };
+                    // 回傳為 2xx：但可能是 HTML（content-type 含 text/html）或 JSON
+                    if (contentType.includes('application/json')) {
+                        let result;
+                        try {
+                            result = JSON.parse(rawText);
+                        } catch (e) {
+                            item.aiResult = { status: 'error', error: '解析 JSON 失敗' };
+                            console.error('JSON parse error:', e, rawText);
+                        }
+                        if (result) {
+                            if (result.error) {
+                                item.aiResult = { status: 'error', error: result.error };
+                            } else {
+                                item.aiResult = { status: 'done', fulfill: result.fulfill || '', reason: result.reason || '' };
+                            }
+                        }
+                    } else {
+                        // 非 JSON 回應（例如 HTML）——記錄並回報到 UI
+                        item.aiResult = { status: 'error', error: `非 JSON 回應（Content-Type: ${contentType}）。伺服器回應片段: ${rawText.substring(0,500)}` };
+                        console.error('Non-JSON response from /api/gemini:', res.status, contentType, rawText);
+                    }
                 }
             } catch (e) {
                 item.aiResult = { status: 'error', error: e.message };
+                console.error('analyzeItem error:', e);
             }
             displayQueryResults(sortQueryResults(filteredData));
             if (currentDetailId && String(currentDetailId) === String(id)) {

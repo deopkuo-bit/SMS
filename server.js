@@ -24,17 +24,24 @@ app.use(express.static(path.join(__dirname))); // serve index_AI.html, railwayDa
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-app.post('/api/gemini', async (req, res) => {
-  const { content, rounds } = req.body;
-  if (!content || !Array.isArray(rounds) || rounds.length === 0) {
-    return res.status(400).json({ error: "content 與 rounds 欄位不可為空且 rounds 必須為陣列且至少有一筆" });
-  }
+app.post('/api/gemini', async (req, res, next) => {
+  try {
+    const { content, rounds } = req.body;
+    if (!content || !Array.isArray(rounds) || rounds.length === 0) {
+      res.status(400).json({ error: "content 與 rounds 欄位不可為空且 rounds 必須為陣列且至少有一筆" });
+      return;
+    }
 
-  // 輕量輸入檢查（避免過長導致費用暴衝）
-  if (String(content).length > 20000) return res.status(400).json({ error: 'content 太長' });
+    if (!GEMINI_API_KEY) {
+      res.status(500).json({ error: "Server 未設定 GEMINI_API_KEY（請在環境變數設定）" });
+      return;
+    }
 
-  const roundsText = rounds.map((r, idx) => `第${idx+1}次回復內容:\n${r.handling}\n第${idx+1}次審查意見:\n${r.review}\n`).join('\n');
-  const prompt = `
+    // 輕量輸入檢查（避免過長導致費用暴衝）
+    if (String(content).length > 20000) return res.status(400).json({ error: 'content 太長' });
+
+    const roundsText = rounds.map((r, idx) => `第${idx+1}次回復內容:\n${r.handling}\n第${idx+1}次審查意見:\n${r.review}\n`).join('\n');
+    const prompt = `
 請根據「原始開立的項目內容」及各次「鐵路機構回復內容」和「審查意見內容」，綜合判斷回復是否符合改善方向。
 請只回覆 JSON 格式，不要其他說明文字。
 {
@@ -48,7 +55,9 @@ ${content}
 ${roundsText}
 `;
 
-  try {
+    // log minimal info for debugging (非敏感訊息)
+    console.log(`[api/gemini] prompt length: ${prompt.length}, rounds: ${rounds.length}`);
+
     const apiRes = await axios.post(GEMINI_URL, {
       contents: [{ role: "user", parts: [{ text: prompt }] }]
     }, { headers: { 'Content-Type': 'application/json' }, timeout: 180000 });
@@ -57,6 +66,8 @@ ${roundsText}
     if (apiRes.data && Array.isArray(apiRes.data.candidates) && apiRes.data.candidates[0]?.content?.parts[0]?.text) {
       aiReply = apiRes.data.candidates[0].content.parts[0].text;
     } else {
+      // 若 Google API 結構異常，回傳 JSON（而非 HTML）
+      console.error('Unexpected google api response shape:', apiRes.data);
       return res.status(502).json({ error: 'API 格式異常', raw: apiRes.data });
     }
 
@@ -68,12 +79,21 @@ ${roundsText}
     } catch (e) {
       result = { error: '解析 AI 回覆 JSON 失敗', raw: aiReply };
     }
+
+    // 明確設定 Content-Type 並回傳 JSON
+    res.setHeader('Content-Type', 'application/json');
     return res.json(result);
   } catch (err) {
-    console.error('Gemini Error:', err.response?.status || err.message);
+    console.error('Gemini Error:', err.response?.status || err.message, err.response?.data || '');
     if (err.response) return res.status(502).json({ error: `Google API ${err.response.status}`, raw: err.response.data });
     return res.status(500).json({ error: err.message });
   }
+});
+
+// 全域錯誤處理（確保不會回傳 HTML）
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err && err.stack ? err.stack : err);
+  res.status(500).json({ error: 'Internal Server Error', detail: err && err.message ? err.message : String(err) });
 });
 
 const PORT = process.env.PORT || 3000;
